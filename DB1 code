@@ -1,0 +1,121 @@
+import pandas as pd
+import random
+from datetime import datetime, timedelta
+
+# Number of fake users
+n_users = 30
+
+# Define gift types
+gift_types = ["rose", "galaxy", "lion", "castle", "star"]
+
+# Generate fake display names without Faker
+def make_username(i):
+    return f"user{i:03d}"
+
+profiles = []
+for i in range(1, n_users+1):
+    # Assign profile type: good, ambiguous, bad
+    if i <= 8:  # definite bad
+        profile_type = "bad"
+    elif i <= 16:  # ambiguous
+        profile_type = "ambiguous"
+    else:  # good
+        profile_type = "good"
+    
+    # IDs
+    viewer_id = f"U{i:03d}"
+    display_name = make_username(i)
+    
+    # Account creation time
+    days_old = random.randint(0, 60) if profile_type != "good" else random.randint(30, 365)
+    account_created_ts = datetime.now() - timedelta(days=days_old)
+    
+    # Age in days
+    age_days = days_old
+    
+    # Geo vs IP
+    geo_home_country = random.choice(["SG", "MY", "PH", "ID", "VN"])
+    if profile_type == "bad":
+        ip_country = random.choice(["PH", "ID", "VN"])
+        if ip_country == geo_home_country:  # force mismatch sometimes
+            ip_country = "CN"
+    elif profile_type == "ambiguous":
+        ip_country = random.choice([geo_home_country, "PH", "MY"])
+    else:
+        ip_country = geo_home_country
+    
+    # Device hash
+    if profile_type == "bad":
+        device_hash = f"DEV_{random.randint(1,5)}"
+    elif profile_type == "ambiguous":
+        device_hash = f"DEV_{random.randint(6,15)}"
+    else:
+        device_hash = f"DEV_{random.randint(16,50)}"
+    
+    # KYC level
+    if profile_type == "bad":
+        kyc_level = random.choice([0, 0, 1])
+    elif profile_type == "ambiguous":
+        kyc_level = random.choice([0, 1, 2])
+    else:
+        kyc_level = 2
+    
+    # Coins per transaction
+    if profile_type == "bad":
+        coins_per_transaction = random.choice([500, 1000, 2000])
+    elif profile_type == "ambiguous":
+        coins_per_transaction = random.choice([50, 100, 500])
+    else:
+        coins_per_transaction = random.choice([5, 10, 20, 50])
+    
+    # Number of transactions
+    if profile_type == "bad":
+        num_transaction = random.randint(10, 50)
+    elif profile_type == "ambiguous":
+        num_transaction = random.randint(5, 20)
+    else:
+        num_transaction = random.randint(1, 10)
+    
+    # Avg session duration
+    if profile_type == "bad":
+        avg_session_duration_secs = random.randint(10, 120)
+    elif profile_type == "ambiguous":
+        avg_session_duration_secs = random.randint(60, 600)
+    else:
+        avg_session_duration_secs = random.randint(600, 3600)
+    
+    # Preferred gift type
+    if profile_type == "bad":
+        preferred_gift_type = "galaxy"
+    elif profile_type == "ambiguous":
+        preferred_gift_type = random.choice(gift_types)
+    else:
+        preferred_gift_type = "rose"
+    
+    # Cluster ID
+    if profile_type == "bad":
+        cluster_id = random.choice(["cluster_A", "cluster_B"])
+    elif profile_type == "ambiguous":
+        cluster_id = random.choice(["cluster_C", ""])
+    else:
+        cluster_id = ""
+    
+    profiles.append([
+        viewer_id, display_name, account_created_ts.strftime("%Y-%m-%d %H:%M:%S"), 
+        age_days, geo_home_country, ip_country, device_hash, kyc_level, 
+        coins_per_transaction, num_transaction, avg_session_duration_secs, 
+        preferred_gift_type, cluster_id, profile_type
+    ])
+
+# Create dataframe
+df_profiles = pd.DataFrame(profiles, columns=[
+    "viewer_id", "display_name", "account_created_ts", "age_days", "geo_home_country", 
+    "ip_country", "device_hash", "kyc_level", "coins_per_transaction", "num_transaction", 
+    "avg_session_duration_secs", "preferred_gift_type", "cluster_id", "profile_type"
+])
+
+# Save to CSV
+df_profiles.to_csv("fake_tiktok_profiles.csv", index=False)
+
+print("✅ Generated 30 fake TikTok profiles and saved to fake_tiktok_profiles.csv")
+print(df_profiles.head())
