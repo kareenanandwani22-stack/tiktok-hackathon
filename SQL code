@@ -1,0 +1,90 @@
+sqlite3 "/Users/phoebekuek/Desktop/tiktok.db"
+
+-- Fresh table
+DROP TABLE IF EXISTS users_master;
+
+CREATE TABLE users_master (
+  viewer_id TEXT PRIMARY KEY,
+  display_name TEXT,
+  account_created_ts TEXT,
+  age_days INTEGER,
+  geo_home_country TEXT,
+  ip_country TEXT,
+  device_hash TEXT,
+  kyc_level INTEGER,
+  coins_per_transaction INTEGER,
+  num_transaction INTEGER,
+  avg_session_duration_secs INTEGER,
+  preferred_gift_type TEXT,
+  cluster_id TEXT,
+  profile_type TEXT,
+  risk_score REAL,      -- numeric for dashboard
+  risk_label TEXT       -- text label from your friend's algo
+);
+
+-- Import CSV
+.mode csv
+.headers on
+.import "/Users/phoebekuek/Downloads/fake_tiktok_profiles_29r.csv" users_master
+
+-- Clean header/empties if needed
+DELETE FROM users_master WHERE viewer_id = 'viewer_id';
+DELETE FROM users_master WHERE viewer_id IS NULL OR TRIM(viewer_id) = '';
+
+-- Optional helpful indexes
+CREATE INDEX IF NOT EXISTS idx_users_device_hash ON users_master(device_hash);
+CREATE INDEX IF NOT EXISTS idx_users_cluster_id ON users_master(cluster_id);
+
+
+-- Compute composite using your friend's exact logic, assign a text label,
+-- then map that label to a numeric score for the dashboard.
+WITH scored AS (
+  SELECT
+    u.viewer_id,
+    (
+      CASE WHEN ( (u.num_transaction * u.coins_per_transaction) / (NULLIF(u.avg_session_duration_secs,0) / 60.0) ) >= 1000 THEN 1.0 ELSE 0.0 END +
+      CASE WHEN u.cluster_id IS NOT NULL AND u.coins_per_transaction >= 1000 THEN 1.0 ELSE 0.0 END +
+      CASE WHEN u.device_hash IN (
+           SELECT device_hash
+           FROM users_master
+           GROUP BY device_hash
+           HAVING COUNT(DISTINCT viewer_id) >= 3
+              AND SUM(num_transaction * coins_per_transaction) >= 1000
+      ) THEN 1.0 ELSE 0.0 END +
+      CASE WHEN u.avg_session_duration_secs <= 30 AND (u.num_transaction * u.coins_per_transaction) >= 1000 THEN 0.5 ELSE 0.0 END +
+      CASE WHEN u.age_days <= 7 AND (u.num_transaction * u.coins_per_transaction) >= 1000 THEN 0.5 ELSE 0.0 END +
+      CASE WHEN u.kyc_level < 2 AND (u.num_transaction * u.coins_per_transaction) >= 1000 THEN 0.5 ELSE 0.0 END
+    ) AS composite_sum
+  FROM users_master u
+),
+labeled AS (
+  SELECT
+    s.viewer_id,
+    CASE
+      WHEN s.composite_sum >= 3.5 THEN 'High Risk'
+      WHEN s.composite_sum >= 2.0 THEN 'Medium Risk'
+      ELSE 'Low Risk'
+    END AS risk_label
+  FROM scored s
+)
+UPDATE users_master AS u
+SET
+  risk_label = (SELECT l.risk_label FROM labeled l WHERE l.viewer_id = u.viewer_id),
+  risk_score = CASE (SELECT l.risk_label FROM labeled l WHERE l.viewer_id = u.viewer_id)
+                 WHEN 'High Risk' THEN 90.0
+                 WHEN 'Medium Risk' THEN 60.0
+                 ELSE 20.0
+               END;
+
+
+.tables
+PRAGMA table_info(users_master);
+SELECT COUNT(*) AS total_rows FROM users_master;
+
+SELECT viewer_id, display_name, risk_label, risk_score
+FROM users_master
+ORDER BY risk_score DESC, viewer_id
+LIMIT 15;
+
+
+.quit
