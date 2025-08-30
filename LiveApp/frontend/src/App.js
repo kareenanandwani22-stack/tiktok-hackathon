@@ -4,7 +4,7 @@ import { supabase } from "./supabaseClient";
 
 function App() {
   const [messages, setMessages] = useState([
-    { user: "Host", text: "Don't forget to Gift :D" },
+    { user: "Host", text: "SUPPORT DI BIO :) XZEE" },
     { user: "Heyyy", text: "joined" },
     { user: "xZEE", text: "joined" },
   ]);
@@ -91,7 +91,7 @@ function App() {
           {/* Background video */}
           <video
             className="live-video"
-            src="/livevid.mp4"
+            src="https://www.w3schools.com/html/mov_bbb.mp4"
             autoPlay
             muted
             loop
@@ -104,12 +104,12 @@ function App() {
             <div className="top-bar">
               <div className="profile">
                 <img
-                  src="/profile.jpg"
+                  src="https://via.placeholder.com/40"
                   alt="avatar"
                   className="avatar"
                 />
                 <div>
-                  <strong>Pentabyte</strong>
+                  <strong>Asep Kopling</strong>
                   <p>22.2K ♥</p>
                 </div>
               </div>

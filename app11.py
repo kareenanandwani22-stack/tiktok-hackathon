@@ -3,7 +3,8 @@ import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 #import sqlalchemy
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
+
 
 # ---------- Supabase connection ----------
 # Prefer env var; fall back to your provided URI so it "just works"
@@ -62,12 +63,62 @@ def risk_badge(label: str) -> str:
     text = label or "Unknown"
     return f'<span style="background:{color};color:white;padding:2px 10px;border-radius:999px;font-weight:600">{text}</span>'
 
+RESET_U001_ON_APP_START = True  # set False to disable
+
+def reset_u001():
+    """Clear U001 demo state but keep other users intact."""
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    with engine.begin() as conn:  # single transaction
+        # 1) Clear U001's past gift events (others untouched)
+        conn.execute(text("DELETE FROM public.gift_events WHERE viewer_id = 'U001'"))
+
+        # 2) Ensure/refresh baseline for U001 in catalog (set age to 1 day)
+        conn.execute(text("""
+            INSERT INTO public.profiles_catalog (
+              viewer_id, display_name, account_created_ts, age_days,
+              geo_home_country, ip_country, device_hash, kyc_level,
+              coins_per_transaction, num_transaction, avg_session_duration_secs,
+              preferred_gift_type, cluster_id, profile_type
+            ) VALUES (
+              'U001','user001', to_char(now() - interval '1 day','YYYY-MM-DD HH24:MI:SS'), 1,
+              'SG','ID','DEV_5', 0,
+              2000, 49, 41,
+              'galaxy','cluster_B','bad'
+            )
+            ON CONFLICT (viewer_id) DO UPDATE SET
+              display_name = EXCLUDED.display_name,
+              account_created_ts = EXCLUDED.account_created_ts,
+              age_days = EXCLUDED.age_days,
+              geo_home_country = EXCLUDED.geo_home_country,
+              ip_country = EXCLUDED.ip_country,
+              device_hash = EXCLUDED.device_hash,
+              kyc_level = EXCLUDED.kyc_level,
+              coins_per_transaction = EXCLUDED.coins_per_transaction,
+              num_transaction = EXCLUDED.num_transaction,
+              avg_session_duration_secs = EXCLUDED.avg_session_duration_secs,
+              preferred_gift_type = EXCLUDED.preferred_gift_type,
+              cluster_id = EXCLUDED.cluster_id,
+              profile_type = EXCLUDED.profile_type;
+        """))
+
+        # 3) Remove U001 from users_master so next gift reseeds from catalog
+        conn.execute(text("DELETE FROM public.users_master WHERE viewer_id = 'U001'"))
+
+        # 4) (Optional) prompt PostgREST to reload cached schema
+        conn.execute(text("SELECT pg_notify('pgrst','reload schema')"))
 
 # ---------- Streamlit UI ----------
 st.title("Live Stream Risk Dashboard (Supabase)")
 st.write("Real-time user risk monitoring for live stream")
 if st.button("🔄 Refresh data"):
     load_data.clear()        # clear the cache
+
+if 'did_reset_u001' not in st.session_state:
+    st.session_state['did_reset_u001'] = False
+
+if RESET_U001_ON_APP_START and not st.session_state['did_reset_u001']:
+    reset_u001()
+    st.session_state['did_reset_u001'] = True
 
 
 
