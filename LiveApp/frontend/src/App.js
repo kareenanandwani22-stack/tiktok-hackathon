@@ -1,12 +1,13 @@
+// App.jsx
 import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { supabase } from "./supabaseClient";
 
 function App() {
   const [messages, setMessages] = useState([
-    { user: "Host", text: "SEND GIFTS TO SUPPORT!" },
-    { user: "Heyyybeee", text: "joined" },
-    { user: "JellyBelly", text: "joined" },
+    { user: "Host", text: "SEND GIFTS TO SUPPORT ME!" },
+    { user: "Heyyy", text: "joined" },
+    { user: "xZEE", text: "joined" },
   ]);
   const [text, setText] = useState("");
   const [showGifts, setShowGifts] = useState(false);
@@ -23,35 +24,29 @@ function App() {
   const sessionStartMsRef = useRef(null);
 
   useEffect(() => {
-    // Mark the time U001 opened the live
     sessionStartMsRef.current = Date.now();
-
-    // (Optional) persist across reloads:
-    // const saved = Number(sessionStorage.getItem("sessStartMs"));
-    // const now = Date.now();
-    // sessionStartMsRef.current = saved && !Number.isNaN(saved) ? saved : now;
-    // if (!saved) sessionStorage.setItem("sessStartMs", String(now));
   }, []);
+
+  function appendSystem(text) {
+    setMessages((prev) => [...prev, { user: "System", text }].slice(-5));
+  }
 
   async function sendGiftToDB({ giftType, coins }) {
     if (!supabase) {
       return { ok: false, error: new Error("Supabase not configured") };
     }
 
-    // Seconds since session started (live)
     const start = sessionStartMsRef.current ?? Date.now();
     const sessionSecs = Math.floor((Date.now() - start) / 1000);
 
-    const { error } = await supabase
-      .from("gift_events")
-      .insert([
-        {
-          viewer_id: VIEWER_ID,
-          gift_type: giftType,              // e.g. 'rose'
-          gift_coins: coins,                // e.g. 10
-          session_duration_secs: sessionSecs, // live seconds
-        },
-      ]);
+    const { error } = await supabase.from("gift_events").insert([
+      {
+        viewer_id: VIEWER_ID,
+        gift_type: giftType,
+        gift_coins: coins,
+        session_duration_secs: sessionSecs,
+      },
+    ]);
 
     return { ok: !error, error };
   }
@@ -60,28 +55,36 @@ function App() {
     if (!text) return;
     setMessages((prev) => {
       const updated = [...prev, { user: "You", text }];
-      return updated.slice(-5); // keep last 5 messages
+      return updated.slice(-5);
     });
     setText("");
   };
 
   const handleSendGift = async (gift) => {
-    // If you want optimistic chat UI, uncomment:
-    // setMessages(prev =>
-    //   [...prev, { user: "You", text: `sent ${gift.emoji} ${gift.name}` }].slice(-5)
-    // );
+    const label = `${gift.emoji} ${gift.name}`;
 
-    const { ok, error } = await sendGiftToDB({
-      giftType: gift.name.toLowerCase(),
-      coins: gift.coins,
-    });
+    try {
+      const { ok, error } = await sendGiftToDB({
+        giftType: gift.name.toLowerCase(),
+        coins: gift.coins,
+      });
 
-    if (!ok) {
-      console.warn("Gift failed:", error?.message);
-      // Keep errors out of chat UI
+      if (ok) {
+        appendSystem(
+          `${label} sent successfully (${gift.coins} coin${
+            gift.coins > 1 ? "s" : ""
+          }).`
+        );
+      } else {
+        console.warn("Gift failed:", error?.message);
+        appendSystem(`Failed to send ${label}. Please try again.`);
+      }
+    } catch (e) {
+      console.warn("Gift failed (exception):", e);
+      appendSystem(`Failed to send ${label}. Please try again.`);
+    } finally {
+      setShowGifts(false);
     }
-
-    setShowGifts(false);
   };
 
   return (
@@ -103,11 +106,7 @@ function App() {
             {/* Top bar */}
             <div className="top-bar">
               <div className="profile">
-                <img
-                  src="/profile.jpg"
-                  alt="avatar"
-                  className="avatar"
-                />
+                <img src="/profile.jpg" alt="avatar" className="avatar" />
                 <div>
                   <strong>PentaByte</strong>
                   <p>22.2K ♥</p>
@@ -194,4 +193,3 @@ function App() {
 }
 
 export default App;
-  
