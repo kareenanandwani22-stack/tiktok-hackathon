@@ -3,7 +3,7 @@ import "./App.css";
 
 function App() {
   const [messages, setMessages] = useState([
-    { user: "Host", text: "SUPPORT DI BIO :) XZEE" },
+    { user: "Host", text: "Don't forget to Gift :D" },
     { user: "Heyyy", text: "joined" },
     { user: "xZEE", text: "joined" },
   ]);
@@ -45,7 +45,7 @@ function App() {
           {/* Background video */}
           <video
             className="live-video"
-            src="https://www.w3schools.com/html/mov_bbb.mp4"
+            src="/livevid.mp4"
             autoPlay
             muted
             loop
@@ -58,12 +58,12 @@ function App() {
             <div className="top-bar">
               <div className="profile">
                 <img
-                  src="https://via.placeholder.com/40"
+                  src="/profile.jpg"
                   alt="avatar"
                   className="avatar"
                 />
                 <div>
-                  <strong>Asep Kopling</strong>
+                  <strong>Pentabyte</strong>
                   <p>22.2K ♥</p>
                 </div>
               </div>
