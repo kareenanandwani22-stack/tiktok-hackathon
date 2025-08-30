@@ -54,7 +54,7 @@ It monitors user behavior to detect suspicious activity based on transaction pat
 - Kareena Nandwani  
 - Luvena Liethanti  
 - Michelle Halim  
-- Sofeanna Y  
+- Sofeanna Yusof 
 
 ---
 
