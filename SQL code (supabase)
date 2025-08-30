@@ -217,18 +217,7 @@ FOR EACH ROW EXECUTE FUNCTION public.trg_gift_events_ai_fn();
 -- Clear U001's event history (does NOT touch others)
 DELETE FROM public.gift_events WHERE viewer_id = 'U001';
 
--- Ensure/refresh U001 baseline in catalog (static values you want)
-INSERT INTO public.profiles_catalog (
-  viewer_id, display_name, account_created_ts, age_days,
-  geo_home_country, ip_country, device_hash, kyc_level,
-  coins_per_transaction, num_transaction, avg_session_duration_secs,
-  preferred_gift_type, cluster_id, profile_type
-) VALUES (
-  'U001', 'user001', '2025-08-11 22:08:54', 1,
-  'SG', 'ID', 'DEV_5', 0,
-  2000, 49, 41,
-  'galaxy', 'cluster_B', 'bad'
-)
+
 ON CONFLICT (viewer_id) DO UPDATE SET
   display_name = EXCLUDED.display_name,
   account_created_ts = EXCLUDED.account_created_ts,
