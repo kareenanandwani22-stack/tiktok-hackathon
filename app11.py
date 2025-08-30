@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 #import sqlalchemy
 from sqlalchemy import create_engine
 
@@ -8,7 +9,10 @@ from sqlalchemy import create_engine
 # Prefer env var; fall back to your provided URI so it "just works"
 DATABASE_URL = os.getenv("DATABASE_URL","postgresql://postgres.xapomfdwyjvxgemvlboa:Tiktokhackathon123@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require")
 
-@st.cache_data
+# Auto-refresh every 5 seconds
+st_autorefresh(interval=5000, key="live_refresh") 
+
+@st.cache_data(ttl=5)
 def load_data():
     """Load data from Supabase Postgres"""
     try:
@@ -49,9 +53,23 @@ def generate_risk_reasons(row):
         reasons.append(f"cluster_{row['cluster_id']}")
     return reasons
 
+def risk_badge(label: str) -> str:
+    color = {
+        "High Risk": "#ef4444",   # red
+        "Medium Risk": "#f59e0b", # amber
+        "Low Risk": "#22c55e",    # green
+    }.get(label or "", "#9ca3af") # gray fallback
+    text = label or "Unknown"
+    return f'<span style="background:{color};color:white;padding:2px 10px;border-radius:999px;font-weight:600">{text}</span>'
+
+
 # ---------- Streamlit UI ----------
 st.title("Live Stream Risk Dashboard (Supabase)")
 st.write("Real-time user risk monitoring for live stream")
+if st.button("🔄 Refresh data"):
+    load_data.clear()        # clear the cache
+
+
 
 with st.spinner("Loading data from Supabase..."):
     df = load_data()
@@ -89,7 +107,10 @@ if len(df_sorted) > 0:
 
     # Drilldown
     st.subheader("Viewer Details")
-    viewer_choice = st.selectbox("Select Viewer for Drilldown", df_sorted["viewer_id"])
+    viewer_ids = df_sorted["viewer_id"].tolist()
+    default_index = viewer_ids.index("U001") if "U001" in viewer_ids else 0
+    viewer_choice = st.selectbox("Select Viewer for Drilldown", viewer_ids, index=default_index)
+
     if viewer_choice:
         viewer_info = df_sorted[df_sorted["viewer_id"] == viewer_choice].iloc[0]
         col1, col2 = st.columns(2)
@@ -97,8 +118,14 @@ if len(df_sorted) > 0:
             st.write("#### Basic Information")
             st.write(f"**Viewer ID:** {viewer_info['viewer_id']}")
             st.write(f"**Display Name:** {viewer_info['display_name']}")
-            st.write(f"**Risk Score:** {viewer_info['risk_score']}")
-            st.write(f"**Risk Label:** {viewer_info.get('risk_label','')}")
+            risk_label = viewer_info.get('risk_label', '')
+            risk_score = viewer_info.get('risk_score', 0)
+
+            cols = st.columns([1,1])
+            with cols[0]:
+                st.write(f"**Risk Score:** {risk_score}")
+            with cols[1]:
+                st.markdown(risk_badge(risk_label), unsafe_allow_html=True)
             st.write(f"**Profile Type:** {viewer_info['profile_type']}")
             st.write(f"**Cluster ID:** {viewer_info['cluster_id']}")
         with col2:
@@ -129,6 +156,7 @@ if len(df_sorted) > 0:
             st.write("**Risk Factors:** None detected")
 else:
     st.warning("No users found.")
+
 
 # Analytics
 st.subheader("Analytics Overview")

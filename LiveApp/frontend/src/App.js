@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
+import { supabase } from "./supabaseClient";
 
 function App() {
   const [messages, setMessages] = useState([
@@ -12,11 +13,48 @@ function App() {
 
   const gifts = [
     { name: "Rose", emoji: "🌹", coins: 1 },
-    { name: "Lion", emoji: "🦁", coins: 1 },
-    { name: "Castle", emoji: "🏰", coins: 1 },
-    { name: "Galaxy", emoji: "🌌", coins: 1 },
-    { name: "Star", emoji: "⭐", coins: 1 },
+    { name: "Lion", emoji: "🦁", coins: 10 },
+    { name: "Castle", emoji: "🏰", coins: 100 },
+    { name: "Star", emoji: "⭐", coins: 1000 },
+    { name: "Galaxy", emoji: "🌌", coins: 10000 },
   ];
+
+  const VIEWER_ID = "U001";
+  const sessionStartMsRef = useRef(null);
+
+  useEffect(() => {
+    // Mark the time U001 opened the live
+    sessionStartMsRef.current = Date.now();
+
+    // (Optional) persist across reloads:
+    // const saved = Number(sessionStorage.getItem("sessStartMs"));
+    // const now = Date.now();
+    // sessionStartMsRef.current = saved && !Number.isNaN(saved) ? saved : now;
+    // if (!saved) sessionStorage.setItem("sessStartMs", String(now));
+  }, []);
+
+  async function sendGiftToDB({ giftType, coins }) {
+    if (!supabase) {
+      return { ok: false, error: new Error("Supabase not configured") };
+    }
+
+    // Seconds since session started (live)
+    const start = sessionStartMsRef.current ?? Date.now();
+    const sessionSecs = Math.floor((Date.now() - start) / 1000);
+
+    const { error } = await supabase
+      .from("gift_events")
+      .insert([
+        {
+          viewer_id: VIEWER_ID,
+          gift_type: giftType,              // e.g. 'rose'
+          gift_coins: coins,                // e.g. 10
+          session_duration_secs: sessionSecs, // live seconds
+        },
+      ]);
+
+    return { ok: !error, error };
+  }
 
   const send = () => {
     if (!text) return;
@@ -27,14 +65,22 @@ function App() {
     setText("");
   };
 
-  const sendGift = (gift) => {
-    setMessages((prev) => {
-      const updated = [
-        ...prev,
-        { user: "You", text: `sent ${gift.emoji} ${gift.name}` },
-      ];
-      return updated.slice(-5);
+  const handleSendGift = async (gift) => {
+    // If you want optimistic chat UI, uncomment:
+    // setMessages(prev =>
+    //   [...prev, { user: "You", text: `sent ${gift.emoji} ${gift.name}` }].slice(-5)
+    // );
+
+    const { ok, error } = await sendGiftToDB({
+      giftType: gift.name.toLowerCase(),
+      coins: gift.coins,
     });
+
+    if (!ok) {
+      console.warn("Gift failed:", error?.message);
+      // Keep errors out of chat UI
+    }
+
     setShowGifts(false);
   };
 
@@ -96,7 +142,7 @@ function App() {
                 {/* 🌹 button sends Rose immediately */}
                 <button
                   className="icon-btn"
-                  onClick={() => sendGift(gifts[0])}
+                  onClick={() => handleSendGift(gifts[0])}
                 >
                   🌹
                 </button>
@@ -131,7 +177,7 @@ function App() {
                   <div
                     key={i}
                     className="gift-card"
-                    onClick={() => sendGift(gift)}
+                    onClick={() => handleSendGift(gift)}
                   >
                     <div className="gift-emoji">{gift.emoji}</div>
                     <p>{gift.name}</p>
@@ -148,3 +194,4 @@ function App() {
 }
 
 export default App;
+  
