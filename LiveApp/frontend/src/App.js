@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import "./App.css";
+import { supabase } from "./supabaseClient"; 
 
 function App() {
   const [messages, setMessages] = useState([
@@ -12,11 +13,38 @@ function App() {
 
   const gifts = [
     { name: "Rose", emoji: "🌹", coins: 1 },
-    { name: "Lion", emoji: "🦁", coins: 1 },
-    { name: "Castle", emoji: "🏰", coins: 1 },
-    { name: "Galaxy", emoji: "🌌", coins: 1 },
-    { name: "Star", emoji: "⭐", coins: 1 },
+    { name: "Lion", emoji: "🦁", coins: 10 },
+    { name: "Castle", emoji: "🏰", coins: 100 },
+    { name: "Star", emoji: "⭐", coins: 1000 },
+    { name: "Galaxy", emoji: "🌌", coins: 10000 },
+    
   ];
+  const VIEWER_ID = "U001";
+  const DEFAULT_SESSION_SECS = 1253; // demo value; replace with your real session time
+
+  async function sendGiftToDB({ giftType, coins, sessionSecs }) {
+    if (!supabase) {
+      console.warn("Supabase not configured yet — skipping DB call.");
+      return;
+    }
+    const { error } = await supabase
+      .from("gift_events")
+      .insert({
+        viewer_id: VIEWER_ID,
+        gift_type: giftType,              // 'rose'
+        gift_coins: coins,                // e.g., 10
+        session_duration_secs: sessionSecs // e.g., 1253
+      });
+
+    if (error) {
+      console.error("Gift insert failed:", error.message);
+      // optional: show a system message in chat
+      setMessages(prev => [...prev, { user: "System", text: `Gift failed: ${error.message}` }].slice(-5));
+    } else {
+      // optional: confirmation in chat
+      setMessages(prev => [...prev, { user: "System", text: "Gift recorded ✅" }].slice(-5));
+    }
+  }
 
   const send = () => {
     if (!text) return;
@@ -27,14 +55,19 @@ function App() {
     setText("");
   };
 
-  const sendGift = (gift) => {
-    setMessages((prev) => {
-      const updated = [
-        ...prev,
-        { user: "You", text: `sent ${gift.emoji} ${gift.name}` },
-      ];
-      return updated.slice(-5);
+  const handleSendGift = async (gift) => {
+  // Optimistic chat update
+    setMessages(prev =>
+      [...prev, { user: "You", text: `sent ${gift.emoji} ${gift.name}` }].slice(-5)
+    );
+
+  // DB insert → triggers risk recompute on the backend
+    await sendGiftToDB({
+      giftType: gift.name.toLowerCase(),
+      coins: gift.coins,
+      sessionSecs: DEFAULT_SESSION_SECS,
     });
+
     setShowGifts(false);
   };
 
@@ -96,7 +129,7 @@ function App() {
                 {/* 🌹 button sends Rose immediately */}
                 <button
                   className="icon-btn"
-                  onClick={() => sendGift(gifts[0])}
+                  onClick={() => handleSendGift(gifts[0])}
                 >
                   🌹
                 </button>
@@ -131,7 +164,7 @@ function App() {
                   <div
                     key={i}
                     className="gift-card"
-                    onClick={() => sendGift(gift)}
+                    onClick={() => handleSendGift(gift)}
                   >
                     <div className="gift-emoji">{gift.emoji}</div>
                     <p>{gift.name}</p>
