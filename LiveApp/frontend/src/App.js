@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
-import { supabase } from "./supabaseClient"; 
+import { supabase } from "./supabaseClient";
 
 function App() {
   const [messages, setMessages] = useState([
@@ -17,33 +17,43 @@ function App() {
     { name: "Castle", emoji: "🏰", coins: 100 },
     { name: "Star", emoji: "⭐", coins: 1000 },
     { name: "Galaxy", emoji: "🌌", coins: 10000 },
-    
   ];
-  const VIEWER_ID = "U001";
-  const DEFAULT_SESSION_SECS = 1253; // demo value; replace with your real session time
 
-  async function sendGiftToDB({ giftType, coins, sessionSecs }) {
+  const VIEWER_ID = "U001";
+  const sessionStartMsRef = useRef(null);
+
+  useEffect(() => {
+    // Mark the time U001 opened the live
+    sessionStartMsRef.current = Date.now();
+
+    // (Optional) persist across reloads:
+    // const saved = Number(sessionStorage.getItem("sessStartMs"));
+    // const now = Date.now();
+    // sessionStartMsRef.current = saved && !Number.isNaN(saved) ? saved : now;
+    // if (!saved) sessionStorage.setItem("sessStartMs", String(now));
+  }, []);
+
+  async function sendGiftToDB({ giftType, coins }) {
     if (!supabase) {
-      console.warn("Supabase not configured yet — skipping DB call.");
-      return;
+      return { ok: false, error: new Error("Supabase not configured") };
     }
+
+    // Seconds since session started (live)
+    const start = sessionStartMsRef.current ?? Date.now();
+    const sessionSecs = Math.floor((Date.now() - start) / 1000);
+
     const { error } = await supabase
       .from("gift_events")
-      .insert({
-        viewer_id: VIEWER_ID,
-        gift_type: giftType,              // 'rose'
-        gift_coins: coins,                // e.g., 10
-        session_duration_secs: sessionSecs // e.g., 1253
-      });
+      .insert([
+        {
+          viewer_id: VIEWER_ID,
+          gift_type: giftType,              // e.g. 'rose'
+          gift_coins: coins,                // e.g. 10
+          session_duration_secs: sessionSecs, // live seconds
+        },
+      ]);
 
-    if (error) {
-      console.error("Gift insert failed:", error.message);
-      // optional: show a system message in chat
-      setMessages(prev => [...prev, { user: "System", text: `Gift failed: ${error.message}` }].slice(-5));
-    } else {
-      // optional: confirmation in chat
-      setMessages(prev => [...prev, { user: "System", text: "Gift recorded ✅" }].slice(-5));
-    }
+    return { ok: !error, error };
   }
 
   const send = () => {
@@ -56,17 +66,20 @@ function App() {
   };
 
   const handleSendGift = async (gift) => {
-  // Optimistic chat update
-    setMessages(prev =>
-      [...prev, { user: "You", text: `sent ${gift.emoji} ${gift.name}` }].slice(-5)
-    );
+    // If you want optimistic chat UI, uncomment:
+    // setMessages(prev =>
+    //   [...prev, { user: "You", text: `sent ${gift.emoji} ${gift.name}` }].slice(-5)
+    // );
 
-  // DB insert → triggers risk recompute on the backend
-    await sendGiftToDB({
+    const { ok, error } = await sendGiftToDB({
       giftType: gift.name.toLowerCase(),
       coins: gift.coins,
-      sessionSecs: DEFAULT_SESSION_SECS,
     });
+
+    if (!ok) {
+      console.warn("Gift failed:", error?.message);
+      // Keep errors out of chat UI
+    }
 
     setShowGifts(false);
   };
@@ -181,3 +194,4 @@ function App() {
 }
 
 export default App;
+  

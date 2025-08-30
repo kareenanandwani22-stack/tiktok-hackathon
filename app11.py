@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 #import sqlalchemy
 from sqlalchemy import create_engine
 
@@ -8,7 +9,10 @@ from sqlalchemy import create_engine
 # Prefer env var; fall back to your provided URI so it "just works"
 DATABASE_URL = os.getenv("DATABASE_URL","postgresql://postgres.xapomfdwyjvxgemvlboa:Tiktokhackathon123@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require")
 
-@st.cache_data
+# Auto-refresh every 5 seconds
+st_autorefresh(interval=5000, key="live_refresh") 
+
+@st.cache_data(ttl=5)
 def load_data():
     """Load data from Supabase Postgres"""
     try:
@@ -52,6 +56,10 @@ def generate_risk_reasons(row):
 # ---------- Streamlit UI ----------
 st.title("Live Stream Risk Dashboard (Supabase)")
 st.write("Real-time user risk monitoring for live stream")
+if st.button("🔄 Refresh data"):
+    load_data.clear()        # clear the cache
+
+
 
 with st.spinner("Loading data from Supabase..."):
     df = load_data()
@@ -89,7 +97,10 @@ if len(df_sorted) > 0:
 
     # Drilldown
     st.subheader("Viewer Details")
-    viewer_choice = st.selectbox("Select Viewer for Drilldown", df_sorted["viewer_id"])
+    viewer_ids = df_sorted["viewer_id"].tolist()
+    default_index = viewer_ids.index("U001") if "U001" in viewer_ids else 0
+    viewer_choice = st.selectbox("Select Viewer for Drilldown", viewer_ids, index=default_index)
+
     if viewer_choice:
         viewer_info = df_sorted[df_sorted["viewer_id"] == viewer_choice].iloc[0]
         col1, col2 = st.columns(2)
