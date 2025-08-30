@@ -1,0 +1,318 @@
+-- 1) Ensure tables exist (keep existing data)
+CREATE TABLE IF NOT EXISTS public.users_master (
+  viewer_id TEXT PRIMARY KEY,
+  display_name TEXT,
+  account_created_ts TEXT,
+  age_days INTEGER,
+  geo_home_country TEXT,
+  ip_country TEXT,
+  device_hash TEXT,
+  kyc_level INTEGER,
+  coins_per_transaction INTEGER,
+  num_transaction INTEGER,
+  avg_session_duration_secs INTEGER,
+  preferred_gift_type TEXT,
+  cluster_id TEXT,
+  profile_type TEXT,
+  risk_score NUMERIC,
+  risk_label TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.profiles_catalog (
+  viewer_id TEXT PRIMARY KEY,
+  display_name TEXT,
+  account_created_ts TEXT,
+  age_days INTEGER,
+  geo_home_country TEXT,
+  ip_country TEXT,
+  device_hash TEXT,
+  kyc_level INTEGER,
+  coins_per_transaction INTEGER,
+  num_transaction INTEGER,
+  avg_session_duration_secs INTEGER,
+  preferred_gift_type TEXT,
+  cluster_id TEXT,
+  profile_type TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.gift_events (
+  id BIGSERIAL PRIMARY KEY,
+  viewer_id TEXT NOT NULL,
+  gift_type TEXT,
+  gift_coins INTEGER,
+  session_duration_secs INTEGER,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- If gift_events existed without session_duration_secs, add it
+ALTER TABLE public.gift_events
+  ADD COLUMN IF NOT EXISTS session_duration_secs INTEGER;
+
+-- Helpful indexes
+CREATE INDEX IF NOT EXISTS idx_users_device_hash ON public.users_master(device_hash);
+CREATE INDEX IF NOT EXISTS idx_users_cluster_id ON public.users_master(cluster_id);
+
+-- 2) RLS to allow the browser (anon key) to insert demo events for U001
+ALTER TABLE public.gift_events ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname='public'
+      AND tablename='gift_events'
+      AND policyname='demo: allow anon insert U001'
+  ) THEN
+    CREATE POLICY "demo: allow anon insert U001"
+    ON public.gift_events
+    FOR INSERT
+    TO anon
+    WITH CHECK (
+      viewer_id = 'U001'
+      AND gift_coins <= 20000
+      AND (session_duration_secs IS NULL OR session_duration_secs <= 86400)
+    );
+  END IF;
+END$$;
+
+-- 3) Risk scoring function (same logic you had)
+CREATE OR REPLACE FUNCTION public.apply_risk(p_viewer_id TEXT)
+RETURNS VOID
+LANGUAGE plpgsql AS
+$$
+BEGIN
+  UPDATE users_master u
+  SET
+    risk_label = CASE
+      WHEN s.comp_sum >= 3.5 THEN 'High Risk'
+      WHEN s.comp_sum >= 2.0 THEN 'Medium Risk'
+      ELSE 'Low Risk'
+    END,
+    risk_score = CASE
+      WHEN s.comp_sum >= 3.5 THEN 90.0
+      WHEN s.comp_sum >= 2.0 THEN 60.0
+      ELSE 20.0
+    END
+  FROM (
+    SELECT (
+      /* 1 */ CASE WHEN (
+              ((u.num_transaction * u.coins_per_transaction)::NUMERIC) /
+              NULLIF(u.avg_session_duration_secs::NUMERIC, 0) * 60.0
+            ) >= 1000 THEN 1.0 ELSE 0.0 END
+      +
+      /* 2 */ CASE WHEN (u.cluster_id IS NOT NULL AND u.coins_per_transaction >= 1000)
+            THEN 1.0 ELSE 0.0 END
+      +
+      /* 3 */ CASE WHEN u.device_hash IN (
+             SELECT device_hash
+             FROM users_master
+             GROUP BY device_hash
+             HAVING COUNT(DISTINCT viewer_id) >= 3
+                AND SUM(num_transaction * coins_per_transaction) >= 1000
+           ) THEN 1.0 ELSE 0.0 END
+      +
+      /* 4 */ CASE WHEN (u.avg_session_duration_secs <= 30 AND
+                         (u.num_transaction * u.coins_per_transaction) >= 1000)
+            THEN 0.5 ELSE 0.0 END
+      +
+      /* 5 */ CASE WHEN (u.age_days <= 7 AND
+                         (u.num_transaction * u.coins_per_transaction) >= 1000)
+            THEN 0.5 ELSE 0.0 END
+      +
+      /* 6 */ CASE WHEN (u.kyc_level < 2 AND
+                         (u.num_transaction * u.coins_per_transaction) >= 1000)
+            THEN 0.5 ELSE 0.0 END
+    ) AS comp_sum
+    FROM users_master u
+    WHERE u.viewer_id = p_viewer_id
+  ) s
+  WHERE u.viewer_id = p_viewer_id;
+END;
+$$;
+
+-- 4) Triggers on users_master (insert/update → recompute)
+CREATE OR REPLACE FUNCTION public.trg_users_ai_risk_fn()
+RETURNS trigger LANGUAGE plpgsql AS
+$$
+BEGIN
+  PERFORM apply_risk(NEW.viewer_id);
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.trg_users_au_risk_fn()
+RETURNS trigger LANGUAGE plpgsql AS
+$$
+BEGIN
+  PERFORM apply_risk(NEW.viewer_id);
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_users_ai_risk ON public.users_master;
+CREATE TRIGGER trg_users_ai_risk
+AFTER INSERT ON public.users_master
+FOR EACH ROW EXECUTE FUNCTION public.trg_users_ai_risk_fn();
+
+DROP TRIGGER IF EXISTS trg_users_au_risk ON public.users_master;
+CREATE TRIGGER trg_users_au_risk
+AFTER UPDATE OF
+  age_days, coins_per_transaction, num_transaction, avg_session_duration_secs,
+  cluster_id, device_hash, kyc_level
+ON public.users_master
+FOR EACH ROW EXECUTE FUNCTION public.trg_users_au_risk_fn();
+
+-- 5) gift_events trigger: seed from catalog (if needed) + increment & update from NEW
+CREATE OR REPLACE FUNCTION public.trg_gift_events_ai_fn()
+RETURNS trigger LANGUAGE plpgsql AS
+$$
+BEGIN
+  -- Ensure a row exists in users_master (seed from catalog if needed)
+  INSERT INTO public.users_master (
+    viewer_id, display_name, account_created_ts, age_days,
+    geo_home_country, ip_country, device_hash, kyc_level,
+    coins_per_transaction, num_transaction, avg_session_duration_secs,
+    preferred_gift_type, cluster_id, profile_type
+  )
+  SELECT
+    pc.viewer_id, pc.display_name, pc.account_created_ts, pc.age_days,
+    pc.geo_home_country, pc.ip_country, pc.device_hash, pc.kyc_level,
+    COALESCE(NEW.gift_coins, pc.coins_per_transaction),
+    COALESCE(pc.num_transaction, 0),
+    COALESCE(NEW.session_duration_secs, pc.avg_session_duration_secs),
+    COALESCE(NEW.gift_type, pc.preferred_gift_type),
+    pc.cluster_id, pc.profile_type
+  FROM public.profiles_catalog pc
+  WHERE pc.viewer_id = NEW.viewer_id
+  ON CONFLICT (viewer_id) DO NOTHING;
+
+  -- Apply the event to the existing row
+  UPDATE public.users_master u
+  SET
+    coins_per_transaction = CEIL((
+      COALESCE(u.coins_per_transaction, 0) * COALESCE(u.num_transaction, 0)
+      + COALESCE(NEW.gift_coins, 0)
+    )::numeric / (COALESCE(u.num_transaction, 0) + 1)),
+    num_transaction = COALESCE(u.num_transaction, 0) + 1,
+    avg_session_duration_secs = GREATEST(
+      COALESCE(u.avg_session_duration_secs, 0),
+      COALESCE(NEW.session_duration_secs, 0)
+    ),
+    preferred_gift_type = COALESCE(NEW.gift_type, u.preferred_gift_type)
+  WHERE u.viewer_id = NEW.viewer_id;
+
+  -- Risk recompute will fire via AFTER UPDATE trigger
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_gift_events_ai ON public.gift_events;
+CREATE TRIGGER trg_gift_events_ai
+AFTER INSERT ON public.gift_events
+FOR EACH ROW EXECUTE FUNCTION public.trg_gift_events_ai_fn();
+
+-- ===================== RESET JUST U001 (RUN AS NEEDED) =====================
+
+-- 6) Keep other 29; reset U001 to a fresh demo state
+-- Clear U001's event history (does NOT touch others)
+DELETE FROM public.gift_events WHERE viewer_id = 'U001';
+
+-- Ensure/refresh U001 baseline in catalog (static values you want)
+INSERT INTO public.profiles_catalog (
+  viewer_id, display_name, account_created_ts, age_days,
+  geo_home_country, ip_country, device_hash, kyc_level,
+  coins_per_transaction, num_transaction, avg_session_duration_secs,
+  preferred_gift_type, cluster_id, profile_type
+) VALUES (
+  'U001', 'user001', '2025-08-11 22:08:54', 1,
+  'SG', 'ID', 'DEV_5', 0,
+  2000, 49, 41,
+  'galaxy', 'cluster_B', 'bad'
+)
+ON CONFLICT (viewer_id) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  account_created_ts = EXCLUDED.account_created_ts,
+  age_days = EXCLUDED.age_days,
+  geo_home_country = EXCLUDED.geo_home_country,
+  ip_country = EXCLUDED.ip_country,
+  device_hash = EXCLUDED.device_hash,
+  kyc_level = EXCLUDED.kyc_level,
+  coins_per_transaction = EXCLUDED.coins_per_transaction,
+  num_transaction = EXCLUDED.num_transaction,
+  avg_session_duration_secs = EXCLUDED.avg_session_duration_secs,
+  preferred_gift_type = EXCLUDED.preferred_gift_type,
+  cluster_id = EXCLUDED.cluster_id,
+  profile_type = EXCLUDED.profile_type;
+
+-- Remove U001 from users_master so the next gift copies baseline & starts fresh
+DELETE FROM public.users_master WHERE viewer_id = 'U001';
+
+-- 7) Make REST see any schema changes immediately
+SELECT pg_notify('pgrst','reload schema');
+
+
+
+
+
+-- Restore 29 static users (U002..U030) to users_master
+WITH ids AS (
+  SELECT i, 'U' || lpad(i::text, 3, '0') AS viewer_id
+  FROM generate_series(2, 30) AS g(i)
+),
+to_insert AS (
+  SELECT
+    viewer_id,
+    'user' || lpad(i::text, 3, '0') AS display_name,
+    to_char(now() - (i * 3 || ' days')::interval, 'YYYY-MM-DD HH24:MI:SS') AS account_created_ts,
+    30 + (i % 200) AS age_days,
+    (ARRAY['SG','MY','PH','ID','VN'])[1 + (i % 5)] AS geo_home_country,
+    (ARRAY['SG','MY','PH','ID','VN'])[1 + ((i + 1) % 5)] AS ip_country,
+    'DEV_' || (10 + i) AS device_hash,
+    CASE WHEN i % 3 = 0 THEN 2 WHEN i % 3 = 1 THEN 1 ELSE 0 END AS kyc_level,
+    CASE WHEN i % 3 = 0 THEN 50 WHEN i % 3 = 1 THEN 100 ELSE 20 END AS coins_per_transaction,
+    CASE WHEN i % 3 = 0 THEN 5  WHEN i % 3 = 1 THEN 12  ELSE 3  END AS num_transaction,
+    CASE WHEN i % 3 = 0 THEN 1200 WHEN i % 3 = 1 THEN 600 ELSE 2400 END AS avg_session_duration_secs,
+    (ARRAY['rose','galaxy','lion','castle','star'])[1 + (i % 5)] AS preferred_gift_type,
+    CASE WHEN i % 4 = 0 THEN 'cluster_A' WHEN i % 4 = 1 THEN 'cluster_B'
+         WHEN i % 4 = 2 THEN 'cluster_C' ELSE NULL END AS cluster_id,
+    CASE WHEN i % 3 = 0 THEN 'good' WHEN i % 3 = 1 THEN 'ambiguous' ELSE 'bad' END AS profile_type
+  FROM ids
+)
+INSERT INTO public.users_master (
+  viewer_id, display_name, account_created_ts, age_days,
+  geo_home_country, ip_country, device_hash, kyc_level,
+  coins_per_transaction, num_transaction, avg_session_duration_secs,
+  preferred_gift_type, cluster_id, profile_type
+)
+SELECT * FROM to_insert
+ON CONFLICT (viewer_id) DO NOTHING;
+
+-- (optional) mirror them into profiles_catalog
+INSERT INTO public.profiles_catalog (
+  viewer_id, display_name, account_created_ts, age_days,
+  geo_home_country, ip_country, device_hash, kyc_level,
+  coins_per_transaction, num_transaction, avg_session_duration_secs,
+  preferred_gift_type, cluster_id, profile_type
+)
+SELECT
+  viewer_id, display_name, account_created_ts, age_days,
+  geo_home_country, ip_country, device_hash, kyc_level,
+  coins_per_transaction, num_transaction, avg_session_duration_secs,
+  preferred_gift_type, cluster_id, profile_type
+FROM public.users_master
+WHERE viewer_id BETWEEN 'U002' AND 'U030'
+ON CONFLICT (viewer_id) DO NOTHING;
+
+-- Make REST see immediately
+SELECT pg_notify('pgrst','reload schema');
+
+
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT viewer_id FROM users_master LOOP
+    PERFORM apply_risk(r.viewer_id);
+  END LOOP;
+END $$;
+
+
