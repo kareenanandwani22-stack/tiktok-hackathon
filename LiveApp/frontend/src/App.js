@@ -27,8 +27,9 @@ function App() {
     sessionStartMsRef.current = Date.now();
   }, []);
 
+  // Show a notice line without a "User:" prefix
   function appendSystem(text) {
-    setMessages((prev) => [...prev, { user: "System", text }].slice(-5));
+    setMessages((prev) => [...prev, { user: "", text }].slice(-5));
   }
 
   async function sendGiftToDB({ giftType, coins }) {
@@ -54,15 +55,13 @@ function App() {
   const send = () => {
     if (!text) return;
     setMessages((prev) => {
-      const updated = [...prev, { user: "You", text }];
+      const updated = [...prev, { user: "user001", text }];
       return updated.slice(-5);
     });
     setText("");
   };
 
   const handleSendGift = async (gift) => {
-    const label = `${gift.emoji} ${gift.name}`;
-
     try {
       const { ok, error } = await sendGiftToDB({
         giftType: gift.name.toLowerCase(),
@@ -70,18 +69,14 @@ function App() {
       });
 
       if (ok) {
-        appendSystem(
-          `${label} sent successfully (${gift.coins} coin${
-            gift.coins > 1 ? "s" : ""
-          }).`
-        );
+        appendSystem(`user001 has successfully sent a ${gift.emoji}`);
       } else {
         console.warn("Gift failed:", error?.message);
-        appendSystem(`Failed to send ${label}. Please try again.`);
+        appendSystem(`Failed to send ${gift.emoji}. Please try again.`);
       }
     } catch (e) {
       console.warn("Gift failed (exception):", e);
-      appendSystem(`Failed to send ${label}. Please try again.`);
+      appendSystem(`Failed to send ${gift.emoji}. Please try again.`);
     } finally {
       setShowGifts(false);
     }
@@ -119,7 +114,7 @@ function App() {
             <div className="chat-box">
               {messages.map((m, i) => (
                 <div key={i} className="chat-message">
-                  <strong>{m.user}:</strong> {m.text}
+                  {m.user ? <strong>{m.user}:</strong> : null} {m.text}
                 </div>
               ))}
             </div>
